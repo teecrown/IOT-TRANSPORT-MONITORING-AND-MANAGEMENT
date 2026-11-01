@@ -1,8 +1,8 @@
 import json
+import os
 import sqlite3
 import ssl
 from datetime import datetime
-
 import pandas as pd
 from fastapi import FastAPI
 import paho.mqtt.client as mqtt
@@ -74,10 +74,8 @@ def compute_metrics(df):
 
 BROKER = "5bedf517a53645328ea3e3a30e67f571.s1.eu.hivemq.cloud"
 PORT = 8883
-
 USERNAME = "ADMIN"
 PASSWORD = "AdminBus123"
-
 TOPIC = "transport/bus"
 
 # =====================================================
@@ -153,9 +151,9 @@ def on_message(client, userdata, msg):
 client = mqtt.Client()
 
 client.username_pw_set(USERNAME, PASSWORD)
-
-client.tls_set(cert_reqs=ssl.CERT_NONE)
-client.tls_insecure_set(True)
+client.tls_set()
+# client.tls_set(cert_reqs=ssl.CERT_NONE)
+# client.tls_insecure_set(True)
 
 client.on_connect = on_connect
 client.on_disconnect = on_disconnect
@@ -237,10 +235,11 @@ def metrics():
 # =====================================================
 # MAIN
 # =====================================================
-
+port = int(os.environ.get("PORT", 10001))
 if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=10001
+        port=port   
     )
+   
