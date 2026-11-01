@@ -9,7 +9,14 @@ import time
 # CONFIG
 # =====================================================
 
-API_URL = "http://127.0.0.1:10001"
+import os
+
+API_URL = os.getenv(
+    "API_URL",
+    "http://127.0.0.1:10001"
+).rstrip("/")
+import os
+
 
 st.set_page_config(
     page_title="Smart Transport System - Abeokuta",
