@@ -66,6 +66,7 @@ def compute_metrics(df):
         "congested_buses": int(len(df[df["occupancy"] >= 40])),
         "slow_buses": int(len(df[df["speed_kmh"] <= 20])),
         "total_records": len(df)
+        
     }
 
 # =====================================================
@@ -242,4 +243,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port   
     )
-   

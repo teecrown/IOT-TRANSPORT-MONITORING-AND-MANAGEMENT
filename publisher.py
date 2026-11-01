@@ -1,7 +1,9 @@
+
 import json
-import ssl
+import os
 import time
 import random
+import threading
 from datetime import datetime
 
 import paho.mqtt.client as mqtt
@@ -14,8 +16,14 @@ BROKER = "5bedf517a53645328ea3e3a30e67f571.s1.eu.hivemq.cloud"
 PORT = 8883
 TOPIC = "transport/bus"
 
-USERNAME = "ADMIN"
-PASSWORD = "AdminBus123"
+# Set these as PowerShell environment variables before running.
+USERNAME = os.getenv("MQTT_USERNAME")
+PASSWORD = os.getenv("MQTT_PASSWORD")
+
+if not USERNAME or not PASSWORD:
+    raise SystemExit(
+        "❌ MQTT credentials missing. Set MQTT_USERNAME and MQTT_PASSWORD."
+    )
 
 # =====================================================
 # ROUTE A
@@ -67,122 +75,225 @@ bus_positions = {}
 for i, bus in enumerate(BUSES.keys()):
     bus_positions[bus] = i % 5
 
+# Generate one trip ID per bus for this simulation session.
+trip_ids = {
+    bus: f"{bus}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    for bus in BUSES
+}
+
 # =====================================================
-# MQTT CALLBACKS
+# MQTT CONNECTION STATUS
 # =====================================================
 
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+connection_event = threading.Event()
+mqtt_connected = False
+
+# =====================================================
+# MQTT CALLBACKS (PAHO API VERSION 2)
+# =====================================================
+
+def on_connect(client, userdata, connect_flags, reason_code, properties):
+    global mqtt_connected
+
+    if reason_code == 0:
+        mqtt_connected = True
         print("✅ Connected to HiveMQ Cloud")
+        print(f"📡 Submitting telemetry to: {TOPIC}")
     else:
-        print(f"❌ Connection failed. RC={rc}")
+        mqtt_connected = False
+        print(f"❌ Connection failed. RC={reason_code}")
 
-def on_disconnect(client, userdata, rc):
-    print(f"⚠️ Disconnected. RC={rc}")
+    connection_event.set()
+
+
+def on_disconnect(
+    client, userdata, disconnect_flags, reason_code, properties
+):
+    global mqtt_connected
+
+    mqtt_connected = False
+    print(f"⚠️ Disconnected from HiveMQ. RC={reason_code}")
+
 
 # =====================================================
 # MQTT CLIENT
 # =====================================================
-client = mqtt.Client(protocol=mqtt.MQTTv311)
 
+client = mqtt.Client(
+    callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    protocol=mqtt.MQTTv311
+)
 
 client.username_pw_set(
     USERNAME,
     PASSWORD
 )
 
-client.tls_set(
-    cert_reqs=ssl.CERT_NONE
-)
-
-client.tls_insecure_set(True)
+# Secure TLS with certificate verification enabled.
+client.tls_set()
 
 client.on_connect = on_connect
 client.on_disconnect = on_disconnect
 
 # =====================================================
-# CONNECT
+# CONNECT TO HIVEMQ CLOUD
 # =====================================================
 
 try:
-
     print("Connecting to HiveMQ Cloud...")
 
     client.connect(
         BROKER,
         PORT,
-        60
+        keepalive=60
     )
 
     client.loop_start()
 
-    time.sleep(2)
+    # Wait for the initial connection callback.
+    if not connection_event.wait(timeout=15):
+        raise TimeoutError("HiveMQ connection timed out.")
+
+    if not mqtt_connected:
+        raise ConnectionError("Could not connect to HiveMQ Cloud.")
 
 except Exception as e:
+    print(f"❌ Connection Error: {e}")
 
-    print("Connection Error:", e)
-    raise SystemExit
+    try:
+        client.loop_stop()
+        client.disconnect()
+    except Exception:
+        pass
+
+    raise SystemExit(1)
+
 
 # =====================================================
-# START SIMULATION
+# START BUS SIMULATION
 # =====================================================
 
-print("\n🚌 Starting Abeokuta Smart Transport Simulation\n")
+print("\n🚌 Starting Abeokuta Smart Transport Simulation")
+print("🚌 Total Buses: 10")
+print("🛣️ Route A: Kuto - Panseke - Camp - Adatan - Lafenwa")
+print("🛣️ Route B: Ita Eko - Omida - Ijaye - Oke Ilewo - Totoro")
+print("\nPress CTRL + C to stop simulation.\n")
 
-while True:
 
-    for bus, route in BUSES.items():
+try:
 
-        position = bus_positions[bus]
+    while True:
 
-        stop = route[position]
+        for bus, route in BUSES.items():
 
-        payload = {
-            "bus_id": bus,
-            "trip_id": f"{bus}_{datetime.now().strftime('%Y%m%d_%H%M')}",
-            "stop_id": stop["stop_id"],
-            "timestamp": datetime.now().isoformat(),
-            "lat": round(
-                stop["lat"] + random.uniform(-0.0010, 0.0010),
-                6
-            ),
-            "lon": round(
-                stop["lon"] + random.uniform(-0.0010, 0.0010),
-                6
-            ),
-            "speed_kmh": round(
-                random.uniform(20, 60),
-                2
-            ),
-            "occupancy": random.randint(5, 50)
-        }
+            position = bus_positions[bus]
 
-        result = client.publish(
-            TOPIC,
-            json.dumps(payload),
-            qos=1
-        )
+            stop = route[position]
 
-        if result.rc == 0:
+            # =========================================
+            # GENERATE BUS TELEMETRY
+            # =========================================
 
-            print(
-                f"{bus} | "
-                f"{stop['stop_id']} | "
-                f"Speed={payload['speed_kmh']} km/h | "
-                f"Passengers={payload['occupancy']}"
-            )
+            payload = {
+                "bus_id": bus,
 
-        else:
+                "trip_id": trip_ids[bus],
 
-            print(f"❌ Publish failed for {bus}")
+                "stop_id": stop["stop_id"],
 
-        # Move to next stop
-        bus_positions[bus] = (
-            bus_positions[bus] + 1
-        ) % len(route)
+                "timestamp": datetime.now().isoformat(),
 
-        time.sleep(0.5)
+                "lat": round(
+                    stop["lat"] + random.uniform(-0.0010, 0.0010),
+                    6
+                ),
 
-    print("\n🔄 Route cycle completed\n")
+                "lon": round(
+                    stop["lon"] + random.uniform(-0.0010, 0.0010),
+                    6
+                ),
 
-    time.sleep(3)
+                "speed_kmh": round(
+                    random.uniform(20, 60),
+                    2
+                ),
+
+                "occupancy": random.randint(5, 50)
+            }
+
+            # =========================================
+            # PUBLISH TELEMETRY TO HIVEMQ
+            # =========================================
+
+            if not mqtt_connected:
+                print(f"⚠️ MQTT disconnected. Skipping {bus}.")
+            else:
+
+                try:
+
+                    result = client.publish(
+                        TOPIC,
+                        json.dumps(payload),
+                        qos=1
+                    )
+
+                    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+
+                        result.wait_for_publish(timeout=5)
+
+                        if result.is_published():
+
+                            print(
+                                f"✅ Published: {bus} | "
+                                f"Stop={stop['stop_id']} | "
+                                f"Speed={payload['speed_kmh']} km/h | "
+                                f"Passengers={payload['occupancy']}"
+                            )
+
+                        else:
+
+                            print(
+                                f"❌ Publish not confirmed: {bus}"
+                            )
+
+                    else:
+
+                        print(
+                            f"❌ Publish failed for {bus}. "
+                            f"RC={result.rc}"
+                        )
+
+                except (ValueError, RuntimeError, TimeoutError) as e:
+
+                    print(
+                        f"❌ Publishing error for {bus}: {e}"
+                    )
+
+            # =========================================
+            # MOVE BUS TO NEXT STOP
+            # =========================================
+
+            bus_positions[bus] = (
+                bus_positions[bus] + 1
+            ) % len(route)
+
+            time.sleep(0.5)
+
+        print("\n🔄 Route cycle completed\n")
+
+        time.sleep(3)
+
+
+except KeyboardInterrupt:
+
+    print("\n🛑 Simulation stopped by user.")
+
+
+finally:
+
+    print("🔌 Closing MQTT connection...")
+
+    client.loop_stop()
+    client.disconnect()
+
+    print("✅ MQTT publisher shut down successfully.")
